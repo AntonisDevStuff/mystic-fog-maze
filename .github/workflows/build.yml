@@ -1,0 +1,94 @@
+name: Build and Release
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build-appimage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.READ_ONLY_PAT }}
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Linux dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y patchelf libfuse2 wget zip
+
+      - name: Install appimagetool
+        run: |
+          set -euo pipefail
+          wget -O appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          sudo mv appimagetool /usr/local/bin/appimagetool
+
+      - name: Set repo dir
+        run: echo "REPO_DIR=${GITHUB_WORKSPACE}/src" >> "$GITHUB_ENV"
+
+      - name: Create source.zip for the release
+        run: |
+          set -euo pipefail
+
+          # remove bloat
+          rm -rf "${{ env.REPO_DIR }}/.git" \
+          "${{ env.REPO_DIR }}/.gitignore" \
+          "${{ env.REPO_DIR }}/assets/.gitattributes" \
+          "${{ env.REPO_DIR }}/README.md" \
+          "${{ env.REPO_DIR }}/.debug"
+
+          # zip it
+          cd "${{ env.REPO_DIR }}"
+          zip -r "${GITHUB_WORKSPACE}/game-source-code.zip" .
+
+      - name: Install Python requirements
+        run: |
+          set -euo pipefail
+          cd "${{ env.REPO_DIR }}"
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install "cx_Freeze==8.6.4"
+
+      - name: Build project
+        run: |
+          set -euo pipefail
+          mv "${GITHUB_WORKSPACE}/build.py" "${GITHUB_WORKSPACE}/src/build.py"
+          cd "${{ env.REPO_DIR }}"
+          python build.py
+
+      - name: Upload source.zip to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: game-source-code.zip
+          tag_name: ${{ github.event.release.tag_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mystic_fog_maze-appimage
+          path: ${{ env.REPO_DIR }}/build/mystic-fog-maze.AppImage
+          if-no-files-found: error
+
+      - name: Upload AppImage to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ env.REPO_DIR }}/build/mystic-fog-maze.AppImage
+          tag_name: ${{ github.event.release.tag_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
